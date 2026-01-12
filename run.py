@@ -29,6 +29,7 @@ Optional env:
 Usage:
     python run.py /path/to/video.mp4
     python run.py /path/to/video.mp4 --skip-translation
+    python run.py /path/to/video.mp4 --debug
 """
 
 import argparse
@@ -186,7 +187,7 @@ def run_command(cmd: list, description: str, capture_output: bool = False) -> Op
     print(f"[STEP] {description}")
     print(f"{'='*60}")
     print(f"Command: {' '.join(str(c) for c in cmd)}\n")
-    
+
     try:
         if capture_output:
             result = subprocess.run(
@@ -228,12 +229,12 @@ def extract_audio(input_video: Path, output_wav: Path) -> bool:
     return run_command(cmd, f"Extracting audio from {input_video.name}") is not None
 
 
-def run_whisperjav(audio_file: Path, output_dir: Path, temp_dir: Path) -> Optional[Path]:
+def run_whisperjav(audio_file: Path, output_dir: Path, temp_dir: Path, debug: bool) -> Optional[Path]:
     """Run whisperjav with two-pass ensemble pipeline.
-    
+
     Uses configuration constants:
         - SOURCE_LANGUAGE: Source audio language
-    
+
     Ensemble Configuration:
         Pass 1: Fidelity | Balanced | TEN | Large-V2
         Pass 2: Balanced | Aggressive | Silero V4 | Large-V2
@@ -261,30 +262,32 @@ def run_whisperjav(audio_file: Path, output_dir: Path, temp_dir: Path) -> Option
         # Merge strategy: pass 1 primary + gap fill with pass 2
         "--merge-strategy", "pass1_primary",
     ]
-    
+    if debug:
+        cmd.append("--debug")
+
     result = run_command(cmd, f"Transcribing {audio_file.name} with WhisperJAV (Two-Pass Ensemble)")
     if result is None:
         return None
-    
+
     # Find the generated subtitle file
     lang_code = {"japanese": "ja", "korean": "ko", "chinese": "zh", "english": "en"}.get(SOURCE_LANGUAGE, "ja")
     expected_srt = output_dir / f"{audio_file.stem}.{lang_code}.whisperjav.srt"
-    
+
     if expected_srt.exists():
         return expected_srt
-    
+
     # Fallback: find any .srt file in output dir
     srt_files = list(output_dir.glob("*.srt"))
     if srt_files:
         return srt_files[0]
-    
+
     print(f"Error: No subtitle file found in {output_dir}", file=sys.stderr)
     return None
 
 
-def run_translation(input_srt: Path) -> Optional[Path]:
+def run_translation(input_srt: Path, debug: bool) -> Optional[Path]:
     """Run whisperjav-translate to translate subtitles.
-    
+
     Uses configuration constants:
         - TRANSLATION_TARGET: Target language
         - TRANSLATION_PROVIDER: AI provider (deepseek, openrouter, gemini, etc.)
@@ -301,21 +304,23 @@ def run_translation(input_srt: Path) -> Optional[Path]:
         "--provider", TRANSLATION_PROVIDER,
         "--model", TRANSLATION_MODEL,
         "--tone", TRANSLATION_TONE,
-        "--stream"
+        "--stream",
     ]
-    
+    if debug:
+        cmd.append("--debug")
+
     if TRANSLATION_API_KEY:
         cmd.extend(["--api-key", TRANSLATION_API_KEY])
-    
+
     if TRANSLATION_ENDPOINT:
         cmd.extend(["--endpoint", TRANSLATION_ENDPOINT])
-    
+
     # Run translation, capturing stdout for output path
     print(f"\n{'='*60}")
     print(f"[STEP] Translating to {TRANSLATION_TARGET} using {TRANSLATION_PROVIDER}")
     print(f"{'='*60}")
     print(f"Command: {' '.join(str(c) for c in cmd)}\n")
-    
+
     try:
         result = subprocess.run(
             cmd,
@@ -324,16 +329,16 @@ def run_translation(input_srt: Path) -> Optional[Path]:
             text=True,
             encoding='utf-8'
         )
-        
+
         if result.returncode != 0:
             print(f"Translation failed with exit code {result.returncode}", file=sys.stderr)
             return None
-        
+
         # stdout contains the output path
         output_path = result.stdout.strip()
         if output_path and Path(output_path).exists():
             return Path(output_path)
-        
+
         # Fallback: look for translated file
         stem = input_srt.stem
         if stem.endswith('.whisperjav'):
@@ -341,10 +346,10 @@ def run_translation(input_srt: Path) -> Optional[Path]:
         expected = input_srt.parent / f"{stem}.{TRANSLATION_TARGET}.srt"
         if expected.exists():
             return expected
-            
+
     except Exception as e:
         print(f"Error running translation: {e}", file=sys.stderr)
-    
+
     return None
 
 
@@ -359,13 +364,13 @@ def copy_subtitles(srt_files: list, destination_dir: Path, video_stem: str) -> l
         'zh': 'chs',
     }
     lang_indicators = ['ja', 'en', 'zh', 'ko', 'chs', 'japanese', 'english', 'chinese', 'korean']
-    
+
     copied = []
     for srt in srt_files:
         if srt and srt.exists():
             # Generate destination filename based on video name
             name_parts = srt.stem.split('.')
-            
+
             # Extract language indicator from filename (use LAST match for translated files)
             lang_part = ""
             for part in reversed(name_parts):  # Search from end to find target language
@@ -374,14 +379,14 @@ def copy_subtitles(srt_files: list, destination_dir: Path, video_stem: str) -> l
                     normalized = lang_normalize.get(part.lower(), part.lower())
                     lang_part = f".{normalized}"
                     break
-            
+
             dest_name = f"{video_stem}{lang_part}.srt"
             dest_path = destination_dir / dest_name
-            
+
             shutil.copy2(srt, dest_path)
             print(f"Copied: {srt.name} -> {dest_path}")
             copied.append(dest_path)
-    
+
     return copied
 
 
@@ -407,10 +412,11 @@ Examples:
     python run.py video.mp4 -o /path/to/subs
     python run.py video.mp4 --skip-translation
     python run.py video.mp4 --keep-temp
-    
+    python run.py video.mp4 --debug
+
     # Continue from existing temp directory (skip audio extraction)
     python run.py --continue-from /tmp/whisperjav_xxx -o /path/to/subs
-    
+
     # Translate an existing subtitle file
     python run.py --translate /path/to/subtitle.ja.srt
 
@@ -420,34 +426,36 @@ This script loads `output/.env` (relative to `run.py`) if present. Any matching
 real environment variables take precedence.
         """
     )
-    
+
     # Input
     parser.add_argument("input", nargs="?", help="Input video file path")
-    
+
     # Continue from existing temp dir
     parser.add_argument("--continue-from", metavar="TEMP_DIR",
                        help="Continue from existing temp directory with extracted audio (skip extraction)")
-    
+
     # Translate-only mode
     parser.add_argument("--translate", metavar="SRT_FILE",
                        help="Translate an existing subtitle file (writes intermediates to temp; copies only final subtitle back)")
-    
+
     # Pipeline options
     parser.add_argument("--skip-translation", action="store_true",
                        help="Skip translation step, only transcribe")
-    
+
     # Output options
     parser.add_argument("-o", "--output-dir", default=str(DEFAULT_OUTPUT_DIR),
                        help=f"Output directory for subtitles (default: {DEFAULT_OUTPUT_DIR})")
     parser.add_argument("--keep-temp", action="store_true",
                        help="Keep temporary files after processing")
     parser.add_argument("--temp-dir", help="Custom temporary directory path")
-    
+    parser.add_argument("--debug", action="store_true",
+                       help="Enable debug logging in whisperjav and translation")
+
     args = parser.parse_args()
-    
+
     # Handle --translate mode (translate-only)
     translate_only_mode = args.translate is not None
-    
+
     if translate_only_mode:
         validate_required_env({
             "SOURCE_LANGUAGE": SOURCE_LANGUAGE,
@@ -461,11 +469,11 @@ real environment variables take precedence.
         if not input_srt.exists():
             print(f"Error: Subtitle file not found: {input_srt}", file=sys.stderr)
             sys.exit(1)
-        
+
         if not input_srt.suffix.lower() == '.srt':
             print(f"Error: Expected .srt file, got: {input_srt}", file=sys.stderr)
             sys.exit(1)
-        
+
         output_dir = Path(args.output_dir).resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -488,17 +496,17 @@ real environment variables take precedence.
 ║  Temp:     {str(temp_path)[:45]:<45}║
 ╚══════════════════════════════════════════════════════════════╝
 """)
-        
+
         try:
             temp_input_srt = temp_path / input_srt.name
             shutil.copy2(input_srt, temp_input_srt)
 
-            translated_srt = run_translation(temp_input_srt)
-            
+            translated_srt = run_translation(temp_input_srt, debug=args.debug)
+
             if translated_srt:
                 # Copy to output directory with proper naming
                 final_files = copy_subtitles([translated_srt], output_dir, video_stem)
-                
+
                 print(f"\n{'='*60}")
                 print("[COMPLETE] Translation finished successfully!")
                 print(f"{'='*60}")
@@ -514,12 +522,12 @@ real environment variables take precedence.
                 shutil.rmtree(temp_path, ignore_errors=True)
             else:
                 print(f"\n[INFO] Temporary files preserved at: {temp_path}")
-        
+
         sys.exit(0)
-    
+
     # Handle --continue-from mode
     continue_mode = args.continue_from is not None
-    
+
     if continue_mode:
         validate_required_env({"SOURCE_LANGUAGE": SOURCE_LANGUAGE})
 
@@ -528,20 +536,20 @@ real environment variables take precedence.
         if not temp_path.exists():
             print(f"Error: Temp directory not found: {temp_path}", file=sys.stderr)
             sys.exit(1)
-        
+
         # Find WAV file in temp directory
         wav_files = list(temp_path.glob("*.wav"))
         if not wav_files:
             print(f"Error: No WAV file found in {temp_path}", file=sys.stderr)
             sys.exit(1)
-        
+
         wav_file = wav_files[0]
         video_stem = wav_file.stem
-        
+
         # Output directory
         output_dir = Path(args.output_dir).resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         input_display = f"[continue] {wav_file.name}"
     else:
         validate_required_env({"SOURCE_LANGUAGE": SOURCE_LANGUAGE})
@@ -550,27 +558,27 @@ real environment variables take precedence.
         if not args.input:
             print("Error: Input video file is required (or use --continue-from)", file=sys.stderr)
             sys.exit(1)
-        
+
         input_video = Path(args.input).resolve()
         if not input_video.exists():
             print(f"Error: Input file not found: {input_video}", file=sys.stderr)
             sys.exit(1)
-        
+
         if not input_video.is_file():
             print(f"Error: Input is not a file: {input_video}", file=sys.stderr)
             sys.exit(1)
-        
+
         # Check for ffmpeg
         if shutil.which("ffmpeg") is None:
             print("Error: ffmpeg is not installed or not in PATH", file=sys.stderr)
             sys.exit(1)
-        
+
         video_stem = input_video.stem
         output_dir = Path(args.output_dir).resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         input_display = input_video.name[:45]
-    
+
     if not args.skip_translation:
         validate_required_env({
             "TRANSLATION_TARGET": TRANSLATION_TARGET,
@@ -581,7 +589,7 @@ real environment variables take precedence.
 
     target_display = f"{TRANSLATION_TARGET} ({TRANSLATION_TONE})" if not args.skip_translation else "N/A (skip)"
     provider_display = f"{TRANSLATION_PROVIDER} ({TRANSLATION_MODEL})" if not args.skip_translation else "N/A (skip)"
-    
+
     print(f"""
 ╔══════════════════════════════════════════════════════════════╗
 ║              WhisperJAV Pipeline Runner                      ║
@@ -599,9 +607,9 @@ real environment variables take precedence.
 ║  Output:   {str(output_dir)[:45]:<45}║
 ╚══════════════════════════════════════════════════════════════╝
 """)
-    
+
     generated_subtitles = []
-    
+
     if continue_mode:
         # Continue mode - use existing temp directory
         print(f"[INFO] Continuing from: {temp_path}")
@@ -611,7 +619,7 @@ real environment variables take precedence.
         temp_dir = tempfile.mkdtemp(prefix="whisperjav_", dir=temp_base)
         temp_path = Path(temp_dir)
         print(f"[INFO] Temporary directory: {temp_path}")
-    
+
     try:
         if continue_mode:
             # Skip audio extraction in continue mode
@@ -622,43 +630,44 @@ real environment variables take precedence.
             if not extract_audio(input_video, wav_file):
                 print("Error: Failed to extract audio", file=sys.stderr)
                 sys.exit(1)
-            
+
             print(f"[SUCCESS] Audio extracted: {wav_file}")
-        
+
         # Step 2: Run WhisperJAV transcription
         whisperjav_output_dir = temp_path / "subs"
         whisperjav_output_dir.mkdir(exist_ok=True)
         whisperjav_temp_dir = temp_path / "whisperjav_temp"
         whisperjav_temp_dir.mkdir(exist_ok=True)
-        
+
         transcribed_srt = run_whisperjav(
-            wav_file, 
-            whisperjav_output_dir, 
-            whisperjav_temp_dir
+            wav_file,
+            whisperjav_output_dir,
+            whisperjav_temp_dir,
+            debug=args.debug
         )
-        
+
         if not transcribed_srt:
             print("Error: Failed to generate subtitles", file=sys.stderr)
             sys.exit(1)
-        
+
         print(f"[SUCCESS] Subtitles generated: {transcribed_srt}")
         generated_subtitles.append(transcribed_srt)
-        
+
         # Step 3: Translation (optional)
         if not args.skip_translation:
-            translated_srt = run_translation(transcribed_srt)
-            
+            translated_srt = run_translation(transcribed_srt, debug=args.debug)
+
             if translated_srt:
                 print(f"[SUCCESS] Translation complete: {translated_srt}")
                 generated_subtitles.append(translated_srt)
             else:
                 print("[WARNING] Translation failed, but transcription was successful")
-        
+
         # Step 4: Copy subtitles to output directory
         print(f"\n{'='*60}")
         print("[STEP] Copying subtitles to output directory")
         print(f"{'='*60}")
-        
+
         final_files = copy_subtitles(generated_subtitles, output_dir, video_stem)
 
         # Step 5: Copy final Chinese subtitle to media directory (if applicable)
@@ -671,7 +680,7 @@ real environment variables take precedence.
                 media_copy_path = media_dir / f"{video_stem}.chs.srt"
                 shutil.copy2(chinese_output, media_copy_path)
                 print(f"Copied (media): {chinese_output} -> {media_copy_path}")
-        
+
         print(f"\n{'='*60}")
         print("[COMPLETE] Pipeline finished successfully!")
         print(f"{'='*60}")
@@ -681,7 +690,7 @@ real environment variables take precedence.
         if media_copy_path:
             print(f"\nMedia subtitle:")
             print(f"  - {media_copy_path}")
-        
+
     finally:
         # Cleanup (don't delete in continue mode unless --keep-temp is explicitly False)
         if continue_mode:
