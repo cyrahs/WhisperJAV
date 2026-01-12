@@ -38,29 +38,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
-
-
-class Tee:
-    """Writes to multiple streams simultaneously."""
-    
-    def __init__(self, *streams):
-        self.streams = streams
-    
-    def write(self, data):
-        for stream in self.streams:
-            stream.write(data)
-            stream.flush()
-    
-    def flush(self):
-        for stream in self.streams:
-            stream.flush()
-    
-    def fileno(self):
-        # Return the fileno of the first stream (usually stdout)
-        return self.streams[0].fileno()
 
 # Use virtual environment Python if available
 VENV_PYTHON = Path(__file__).parent / ".venv" / "bin" / "python"
@@ -496,19 +475,8 @@ real environment variables take precedence.
             temp_base.mkdir(parents=True, exist_ok=True)
         temp_dir = tempfile.mkdtemp(prefix="whisperjav_translate_", dir=str(temp_base) if temp_base else None)
         temp_path = Path(temp_dir)
-        
-        # Set up logging
+
         video_stem = input_srt.stem.split('.')[0]  # Get base name (e.g., TEST-001 from TEST-001.ja.srt)
-        log_file_path = output_dir / f"{video_stem}.translate.log"
-        log_file = open(log_file_path, "w", encoding="utf-8")
-        log_file.write(f"WhisperJAV Translation Log - {datetime.now().isoformat()}\n")
-        log_file.write(f"{'='*60}\n\n")
-        
-        original_stdout = sys.stdout
-        original_stderr = sys.stderr
-        sys.stdout = Tee(original_stdout, log_file)
-        sys.stderr = Tee(original_stderr, log_file)
-        
         print(f"""
 ╔══════════════════════════════════════════════════════════════╗
 ║              WhisperJAV Translation Only                     ║
@@ -546,12 +514,6 @@ real environment variables take precedence.
                 shutil.rmtree(temp_path, ignore_errors=True)
             else:
                 print(f"\n[INFO] Temporary files preserved at: {temp_path}")
-
-            if 'log_file' in locals() and log_file:
-                print(f"\n[INFO] Log file saved to: {log_file_path}")
-                sys.stdout = original_stdout
-                sys.stderr = original_stderr
-                log_file.close()
         
         sys.exit(0)
     
@@ -608,18 +570,6 @@ real environment variables take precedence.
         output_dir.mkdir(parents=True, exist_ok=True)
         
         input_display = input_video.name[:45]
-    
-    # Set up logging to file
-    log_file_path = output_dir / f"{video_stem}.log"
-    log_file = open(log_file_path, "w", encoding="utf-8")
-    log_file.write(f"WhisperJAV Pipeline Log - {datetime.now().isoformat()}\n")
-    log_file.write(f"{'='*60}\n\n")
-    
-    # Tee stdout and stderr to both console and log file
-    original_stdout = sys.stdout
-    original_stderr = sys.stderr
-    sys.stdout = Tee(original_stdout, log_file)
-    sys.stderr = Tee(original_stderr, log_file)
     
     if not args.skip_translation:
         validate_required_env({
@@ -742,13 +692,6 @@ real environment variables take precedence.
             shutil.rmtree(temp_path, ignore_errors=True)
         else:
             print(f"\n[INFO] Temporary files preserved at: {temp_path}")
-        
-        # Close log file and restore stdout/stderr
-        if 'log_file' in locals() and log_file:
-            print(f"\n[INFO] Log file saved to: {log_file_path}")
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
-            log_file.close()
 
 
 if __name__ == "__main__":
